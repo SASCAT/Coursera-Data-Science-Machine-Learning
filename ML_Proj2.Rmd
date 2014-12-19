@@ -1,0 +1,186 @@
+---
+title: "Machine Learning Project"
+author: "Jeff Tomlinson"
+date: "Thursday, December 18, 2014"
+output: html_document
+---
+
+## Background
+
+ Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible
+ to collect a large amount of data about personal activity relatively
+ inexpensively. These type of devices are part of the quantified self movement
+ – a group of enthusiasts who take measurements about themselves regularly to
+ improve their health, to find patterns in their behavior, or because they are
+ tech geeks. One thing that people regularly do is quantify how much of a
+ particular activity they do, but they rarely quantify how well they do it. In
+ this project, your goal will be to use data from accelerometers on the belt,
+ forearm, arm, and dumbell of 6 participants. They were asked to perform
+ barbell lifts correctly and incorrectly in 5 different ways. More information
+ is available from the website here: http://groupware.les.inf.puc-rio.br/har
+ (see the section on the Weight Lifting Exercise Dataset).
+ 
+## Data
+
+The training data for this project are available from
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available from 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+### Required libraries
+```{r Setup, echo=FALSE}
+# Required libraries
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+
+```
+
+Read in the training and test data. Assign all of the NA, blank and divide by zero 
+fields to NA.
+```{r ReadData, echo=FALSE}
+
+# Training data
+urlTr <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+csvTr <- "pml-training.csv"
+if (!file.exists(csvTr)) {
+  download.file(urlTr,csvTr)
+}
+trRaw <- read.csv(file=csvTr
+                  , header=T, stringsAsFactors = F
+                  , na.strings=c('NA','','#DIV/0!'))
+
+# Test data
+urlTs <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+csvTs <- "pml-testing.csv"
+if (!file.exists(csvTs)) {
+  download.file(urlTs,csvTs)
+}
+tsRaw <- read.csv(file=csvTs
+                  , header=T, stringsAsFactors = F
+                  , na.strings=c('NA','','#DIV/0!'))
+
+```
+
+## Data Cleaning
+
+Remove any columns that have over half of their data as NA.  
+The first column X contains a order variable.  The data is sorted by classe,
+so all that would be required would be the X column, which would be 
+different in the test set.  Similarly the window variable also increments.
+The name and the exact date and time would also not be useful in anything
+other than the training dataset.
+
+```{r CleanData, echo=FALSE}
+trRaw$classe <- as.factor(trRaw$classe)  
+
+# Remove columns with over half NAs
+trRawLn <- dim(trRaw)[1]
+trRaw<-trRaw[,colSums(is.na(trRaw)) < trRawLn/2]
+trRaw <- trRaw[,-c(1:7)]
+
+nzv <- nearZeroVar(trRaw, saveMetrics=F)
+if (length(nzv) > 0 ) {
+  nzv
+}
+
+```
+There are now `r dim(trRaw)[1]` records with `r dim(trRaw)[2]` columns.
+
+At this point the dataset only contains values that we can use.
+
+## Paritioning
+
+Subset into training and testing setsm with 80% for training and 20% for cross
+validation.
+```{r Partition, echo=FALSE}
+set.seed(570225)
+subSet <- createDataPartition(y=trRaw$classe, p=0.8, list=F)
+subTr <- trRaw[subSet,]
+subTs <- trRaw[-subSet, ]
+
+#qplot(classe, data=trRaw, geom="histogram", main="Histogram of classe", xlab="Classe")
+
+```
+
+The training dataset has `r dim(subTr)[1]` records and the cross validation dataset 
+has `r dim(subTs)[1]` records.
+
+## Model Selection
+
+We will check 2 models.  A quick *recursive partion* model and a more computationally intensive
+*random forest* model.  My earlier tests used the *random forest* model via caret, 
+which required a lot more processing than the simple *random forest* model used here.
+
+## Recursive Partition
+```{r RPART}
+mod1 <- rpart(classe ~ ., method="class", data=subTr)
+pred1 <- predict(mod1, subTr, type="class")
+cmMod1 <-confusionMatrix(pred1, subTr$classe)
+cmMod1
+```
+
+### Random Forest
+```{r RANDFOR}
+mod2 <- randomForest(classe ~. , data=subTr, method="class")
+pred2 <- predict(mod2, subTr)
+cmMod2 <-confusionMatrix(pred2, subTr$classe)
+cmMod2
+```
+
+#### Compare Methods
+```{r COMPMETH, echo=FALSE}
+options(digits=12)
+rptrac <- cmMod1$overall["Accuracy"]
+rftrac <- cmMod2$overall["Accuracy"]
+
+pred1.val  <- predict(mod1, subTs, type="class")
+cmMod1.val <-confusionMatrix(pred1.val, subTs$classe)
+rptrac.val <- cmMod1.val$overall["Accuracy"]
+pred2.val  <- predict(mod2, subTs)
+cmMod2.val <- confusionMatrix(pred2.val, subTs$classe)
+rftrac.val <- cmMod2.val$overall["Accuracy"]
+```
+
+The accuracy of the *recursive partition* model is `r rptrac` and that of the *random forest* model 
+is `r rftrac` (which is unreasonably good). If we then compare the out of sample accuracy, 
+it is `r rptrac.val` for the *random partion* model and `r rftrac.val` for the *random forest* 
+model.  As expected these are both less than the accuracy for their respective
+training models.  The random forest model still appears to very accurate, with regards
+to the cross validation data, so we will use this model for the test data.
+
+## Prediction
+We will predict classe for the test data using our random forest model.
+
+```{r PREDICT}
+testPred <- predict(mod2, tsRaw, type="class")
+testPred
+```
+
+### Output Test Results
+Write the output files (of the form "problem_id_x.txt", where x is 1 to 20)
+each file will just contain the single letter of classe for the associated 
+test record.
+
+```{r OUTPUT}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(testPred)
+```
+
+
+
+
+
+
+
+
